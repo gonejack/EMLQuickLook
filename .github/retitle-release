@@ -1,2 +1,0 @@
-This file triggers a one-off workflow that aligns the v1.0.0 release title
-with its tag. It is removed after the workflow runs.
