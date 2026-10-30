@@ -21,10 +21,12 @@ enum HTMLRenderer {
     /// Base typography for HTML bodies.  These rules are inserted before the
     /// message's own styles so an email that sets its own font still wins.
     private static let htmlBaseCSSRules = """
+    :root { color-scheme: light dark; }
     html { font-size: 12px; -webkit-text-size-adjust: 100%; }
+    html, body { background-color: #ffffff; }
     body {
         margin: 0;
-        padding: 12px 45px 24px 20px;
+        padding: 15px 21px 24px 21px;
         font-family: Helvetica, Arial, sans-serif;
         font-size: 12px;
         line-height: normal;
@@ -35,17 +37,40 @@ enum HTMLRenderer {
     /* Mail's share-page wrapper leaves one extra line of breathing room
        below the URL field. */
     .Apple-Mail-URLShareUserContentTopClass { margin-bottom: 12px; }
+
+    /* Mail renders light message bodies on a dark page by inverting their
+       lightness (its own style sheet uses
+       `-apple-color-filter: apple-invert-lightness()` in dark mode).  WebKit
+       does not expose that filter outside Mail, so reproduce it with a
+       regular CSS inversion.  The hue rotation keeps blues blue; images get
+       the same filter again so photos and screenshots keep their colors. */
+    @media (prefers-color-scheme: dark) {
+        html, body {
+            background-color: #1e1e1f !important;
+            color: #000000;
+        }
+        #emlql-content {
+            -webkit-filter: invert(1) hue-rotate(180deg);
+            filter: invert(1) hue-rotate(180deg);
+        }
+        #emlql-content img,
+        #emlql-content video {
+            -webkit-filter: invert(1) hue-rotate(180deg);
+            filter: invert(1) hue-rotate(180deg);
+        }
+        a { color: #3483fa; }
+    }
     """
 
     /// Header styling shared by HTML and plain-text previews.  The id keeps
     /// message rules such as `div { ... }` from changing the header.
     private static let headerCSSRules = """
     #emlql-header {
-        margin: 0 -20px 5px 4px;
-        padding: 0 0 13px;
-        border-bottom: 1px solid #e5e5e5;
+        margin: 0 -21px 5px 4px;
+        padding: 1px 0 13px;
+        border-bottom: 1px solid #e8e8e8;
         font: 12px/1.3 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-        color: #4d4d4d;
+        color: #575757;
     }
     #emlql-header .emlql-top {
         display: flex;
@@ -57,15 +82,15 @@ enum HTMLRenderer {
         font-size: 14px;
         font-weight: 600;
         line-height: 1.25;
-        color: #4d4d4d;
+        color: #575757;
         overflow-wrap: anywhere;
     }
     #emlql-header .emlql-date {
         flex: none;
-        margin-right: 20px;
+        margin-right: 18px;
         font-size: 11px;
         line-height: 1.3;
-        color: #8e8e93;
+        color: #808080;
         white-space: nowrap;
     }
     #emlql-header .emlql-subject {
@@ -73,7 +98,10 @@ enum HTMLRenderer {
         font-size: 12px;
         line-height: 1.3;
         font-weight: 400;
-        color: #4d4d4d;
+        color: #575757;
+    }
+    #emlql-header .emlql-label {
+        color: #575757;
     }
     #emlql-header .emlql-recipients {
         margin-top: 6px;
@@ -82,6 +110,17 @@ enum HTMLRenderer {
         color: #808080;
     }
     #emlql-header .emlql-row { margin: 0; }
+    @media (prefers-color-scheme: dark) {
+        #emlql-header {
+            color: #ebebeb;
+            border-bottom-color: rgba(255, 255, 255, .115);
+        }
+        #emlql-header .emlql-sender,
+        #emlql-header .emlql-subject,
+        #emlql-header .emlql-label { color: #ebebeb; }
+        #emlql-header .emlql-date,
+        #emlql-header .emlql-recipients { color: #7c7c7c; }
+    }
     /* A one-pixel separator keeps the message's own top margin from
        collapsing into the header margin. */
     #emlql-body-gap {
@@ -428,7 +467,36 @@ enum HTMLRenderer {
             result = metadata + result
         }
 
-        return insertHeader(header, into: result)
+        result = insertHeader(header, into: result)
+        return wrapMessageContent(in: result)
+    }
+
+    /// Wraps the message (everything after the Mail-style header) so dark mode
+    /// can invert just the message colors and leave the header untouched.
+    private static func wrapMessageContent(in html: String) -> String {
+        let opening = "<div id=\"emlql-content\">"
+        var result = html
+
+        if let range = result.range(of: "<div id=\"emlql-body-gap\"></div>") {
+            result.insert(contentsOf: opening, at: range.upperBound)
+        } else if let range = result.range(
+            of: "<body[^>]*>",
+            options: [.regularExpression, .caseInsensitive]
+        ) {
+            result.insert(contentsOf: opening, at: range.upperBound)
+        } else {
+            result = opening + result
+        }
+
+        if let range = result.range(
+            of: "</body>",
+            options: [.caseInsensitive, .backwards]
+        ) {
+            result.insert(contentsOf: "</div>", at: range.lowerBound)
+        } else {
+            result += "</div>"
+        }
+        return result
     }
 
     private static func insertHeader(_ header: String, into html: String) -> String {
@@ -473,6 +541,17 @@ enum HTMLRenderer {
 
     private static func insertBeforeBodyEnd(_ snippet: String, into html: String) -> String {
         guard !snippet.isEmpty else { return html }
+        // The message content is wrapped in `#emlql-content` for dark mode;
+        // attachments belong inside that wrapper so they invert with the rest
+        // of the body.
+        if let range = html.range(
+            of: "</div></body>",
+            options: [.caseInsensitive, .backwards]
+        ) {
+            var result = html
+            result.insert(contentsOf: snippet, at: range.lowerBound)
+            return result
+        }
         guard let range = html.range(
             of: "</body>",
             options: [.caseInsensitive, .backwards]
@@ -504,7 +583,7 @@ enum HTMLRenderer {
         * { box-sizing: border-box; }
         body {
             margin: 0;
-            padding: 12px 45px 24px 20px;
+            padding: 15px 21px 24px 21px;
             font: 12px/1.55 Helvetica, Arial, sans-serif;
             color: #000000;
             background: #ffffff;
@@ -519,23 +598,15 @@ enum HTMLRenderer {
         }
         a { color: #0e64d7; }
         @media (prefers-color-scheme: dark) {
-            body { color: #f5f5f7; background: #1e1e1e; }
-            #emlql-header {
-                color: #d0d0d0;
-                border-bottom-color: rgba(255, 255, 255, .16);
-            }
-            #emlql-header .emlql-sender,
-            #emlql-header .emlql-subject { color: #d0d0d0; }
-            #emlql-header .emlql-date { color: #a1a1a6; }
-            #emlql-header .emlql-recipients { color: #b0b0b0; }
-            a { color: #4da3ff; }
+            body { color: #ffffff; background: #1c1c1d; }
+            a { color: #3796f9; }
         }
         </style>
         </head>
         <body>
         \(header)
-        <pre>\(body)</pre>
-        \(attachments)
+        <div id="emlql-content"><pre>\(body)</pre>
+        \(attachments)</div>
         </body>
         </html>
         """
@@ -579,13 +650,13 @@ enum HTMLRenderer {
             html += "<div class=\"emlql-recipients\">"
             if !to.isEmpty {
                 html += """
-                <div class="emlql-row">\(escapeHTML(localizedLabel("To"))): \
+                <div class="emlql-row"><span class="emlql-label">\(escapeHTML(localizedLabel("To"))):</span> \
                 \(formatAddresses(to))</div>
                 """
             }
             if !cc.isEmpty {
                 html += """
-                <div class="emlql-row">\(escapeHTML(localizedLabel("Cc"))): \
+                <div class="emlql-row"><span class="emlql-label">\(escapeHTML(localizedLabel("Cc"))):</span> \
                 \(formatAddresses(cc))</div>
                 """
             }

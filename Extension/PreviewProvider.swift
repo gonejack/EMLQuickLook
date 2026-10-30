@@ -42,7 +42,7 @@ final class PreviewProvider: QLPreviewProvider, QLPreviewingController {
 
         let reply = QLPreviewReply(
             dataOfContentType: .html,
-            contentSize: CGSize(width: 920, height: 720)
+            contentSize: CGSize(width: 800, height: 600)
         ) { _ in
             htmlData
         }
