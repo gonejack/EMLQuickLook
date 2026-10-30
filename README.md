@@ -33,6 +33,9 @@ Prebuilt releases are available on the
   images, concatenated into one article
 - a Mail-like message header with sender, date, subject, and recipients,
   using Mail's header type sizes, colors, and spacing
+- automatic light and dark appearance matching Mail's Quick Look, including
+  Mail's dark-mode body inversion with images left unchanged
+- an 800 × 600 preview laid out to Mail's page geometry
 - Mail's 12px Helvetica base typography for HTML bodies, with the message's
   own fonts and sizes still taking precedence
 - readable plain-text rendering when there is no HTML body
