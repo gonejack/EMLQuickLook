@@ -56,6 +56,10 @@ This creates:
 - `build/EMLQuickLook.app` — host app with the Quick Look extension
 - `build/emlrender` — command-line renderer that writes the preview HTML
 
+The host app icon is drawn by `Tools/makeicon.swift`, packaged into
+`Resources/AppIcon.icns` by `icon.sh`, and regenerated automatically when the
+source or the `.icns` is out of date.
+
 ## Install
 
 ```sh
@@ -157,7 +161,11 @@ Host/
 Tools/
   main.swift              emlrender CLI
   snapshot.swift          WKWebView PNG snapshot helper
+  makeicon.swift          draws the app icon artwork
+Resources/
+  AppIcon.icns            generated app icon
 build.sh                  builds and ad-hoc signs everything
+icon.sh                   renders and packages the app icon
 install.sh                installs and elects the extension
 uninstall.sh              removes it and restores Mail's extension
 ```

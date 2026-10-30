@@ -7,9 +7,15 @@ APP="$BUILD/EMLQuickLook.app"
 APEX="$APP/Contents/PlugIns/EMLQuickLookExtension.appex"
 SDK="$(xcrun --show-sdk-path)"
 TARGET="arm64-apple-macosx14.0"
+ICON="$ROOT/Resources/AppIcon.icns"
+
+if [[ ! -f "$ICON" || "$ROOT/Tools/makeicon.swift" -nt "$ICON" ]]; then
+    "$ROOT/icon.sh"
+fi
 
 rm -rf "$BUILD"
-mkdir -p "$APP/Contents/MacOS" "$APEX/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APEX/Contents/MacOS"
+cp "$ICON" "$APP/Contents/Resources/AppIcon.icns"
 
 echo "==> Building Quick Look extension"
 xcrun swiftc \
