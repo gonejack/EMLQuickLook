@@ -14,6 +14,11 @@ subparts. The preview then shows headers or a blank body even though the file
 is valid. This extension normalizes line endings, parses the message, and
 returns a self-contained HTML preview.
 
+## Download
+
+Prebuilt releases are available on the
+[releases page](https://github.com/gonejack/EMLQuickLook/releases/latest).
+
 ## Features
 
 - `.eml` and Apple Mail `.emlx` files
@@ -65,6 +70,29 @@ The host app icon is drawn by `Tools/makeicon.swift`, packaged into
 source or the `.icns` is out of date.
 
 ## Install
+
+### From a release
+
+Download and unzip the latest `EMLQuickLook-*-macos-arm64.zip`, move
+`EMLQuickLook.app` to `~/Applications`, and open it once so Launch Services
+registers the extension. Then elect it and disable Mail's previewer:
+
+```sh
+pluginkit -e use -i com.youi.EMLQuickLook.Extension
+pluginkit -e ignore -i com.apple.mail.MailQuickLookExtension
+qlmanage -r
+qlmanage -r cache
+killall quicklookd
+```
+
+The release is ad-hoc signed, not notarized. If macOS blocks the first launch,
+right-click the app and choose Open, or run:
+
+```sh
+xattr -dr com.apple.quarantine ~/Applications/EMLQuickLook.app
+```
+
+### From source
 
 ```sh
 ./install.sh
