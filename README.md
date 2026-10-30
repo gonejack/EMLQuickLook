@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Resources/AppIcon-1024.png" alt="EML Quick Look app icon" width="144">
+</p>
+
 # EML Quick Look
 
 A macOS Quick Look extension for `.eml` and `.emlx` messages that parses and
