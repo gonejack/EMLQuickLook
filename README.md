@@ -5,8 +5,7 @@
 <h1 align="center">EML Quick Look</h1>
 
 <p align="center">
-  A drop-in Quick Look replacement for <code>.eml</code>, <code>.emlx</code>, gzipped
-  <code>.eml.gz</code>, and zstd-compressed <code>.eml.zst</code> files on macOS.<br>
+  A drop-in Quick Look replacement for <code>.eml</code>,<code>.emlx</code>,<code>.eml.gz</code>,<code>.eml.zst</code> files on macOS.<br>
   It parses and renders the message itself, so valid mail no longer previews as a blank page.
 </p>
 
