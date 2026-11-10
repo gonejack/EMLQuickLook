@@ -1,5 +1,7 @@
 import CoreFoundation
+import CZstd
 import Foundation
+import zlib
 
 // MARK: - MIME model
 
@@ -177,6 +179,15 @@ struct MIMEPart {
 // MARK: - MIME parsing
 
 enum MIMEParser {
+    /// A cheap check used for gzip containers, where arbitrary `.gz` files are
+    /// also routed to this extension by Quick Look.  True when the bytes start
+    /// with a plausible RFC 5322 header block.
+    static func hasMessageHeaders(_ data: Data) -> Bool {
+        let split = splitHeaderBody(normalizeNewlines(data))
+        guard !split.header.isEmpty else { return false }
+        return !parseHeaders(split.header).isEmpty
+    }
+
     static func parse(_ data: Data, depth: Int = 0) -> MIMEPart {
         let normalized = normalizeNewlines(data)
         let split = splitHeaderBody(normalized)
@@ -536,6 +547,288 @@ enum HeaderDecoder {
             return nil
         }
         return TextDecoder.string(from: data, charset: charset)
+    }
+}
+
+// MARK: - Message data
+
+enum MessageCompression: String {
+    case gzip
+    case zstd
+}
+
+struct UnpackedMessage {
+    /// Inflated bytes, before any `.emlx` envelope is removed.
+    let expandedData: Data
+    /// RFC 5322 bytes ready for the MIME parser.
+    let messageData: Data
+    let compression: MessageCompression?
+
+    var isCompressed: Bool { compression != nil }
+}
+
+enum MessageData {
+    /// Unwraps a gzip or zstd container (`.eml.gz` / `.eml.zst`) and then an
+    /// optional `.emlx` envelope.
+    static func unpack(
+        _ data: Data,
+        fileName: String? = nil
+    ) throws -> UnpackedMessage {
+        let compression: MessageCompression?
+        let expanded: Data
+
+        if GzipDecoder.isGzip(data) {
+            compression = .gzip
+            expanded = try GzipDecoder.decompress(data)
+        } else if ZstdDecoder.isZstd(data) {
+            compression = .zstd
+            expanded = try ZstdDecoder.decompress(data)
+        } else if fileName?.lowercased().hasSuffix(".gz") == true {
+            compression = .gzip
+            expanded = try GzipDecoder.decompress(data)
+        } else if let name = fileName?.lowercased(),
+                  name.hasSuffix(".zst") || name.hasSuffix(".zstd") {
+            compression = .zstd
+            expanded = try ZstdDecoder.decompress(data)
+        } else {
+            compression = nil
+            expanded = data
+        }
+
+        return UnpackedMessage(
+            expandedData: expanded,
+            messageData: EMLXMessage.messageData(from: expanded),
+            compression: compression
+        )
+    }
+}
+
+// MARK: - Compression limits
+
+enum DecompressionLimits {
+    /// A compressed message can expand enormously.  Keep a preview from
+    /// consuming unbounded memory while still allowing large mail archives.
+    static let maximumBytes = 512 * 1024 * 1024
+}
+
+enum CompressionError: LocalizedError {
+    case invalidArchive(MessageCompression)
+    case truncated(MessageCompression)
+    case decompressionFailed(MessageCompression, String)
+    case tooLarge(maximumBytes: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidArchive(let format):
+            return "The \(format.rawValue) archive is invalid."
+        case .truncated(let format):
+            return "The \(format.rawValue) archive is truncated."
+        case .decompressionFailed(let format, let detail):
+            return "The \(format.rawValue) archive could not be decompressed (\(detail))."
+        case .tooLarge(let maximumBytes):
+            let limit = ByteCountFormatter.string(
+                fromByteCount: Int64(maximumBytes),
+                countStyle: .file
+            )
+            return "The decompressed message is larger than \(limit)."
+        }
+    }
+}
+
+// MARK: - Gzip
+
+enum GzipDecoder {
+    static func isGzip(_ data: Data) -> Bool {
+        data.count >= 2
+            && data[data.startIndex] == 0x1f
+            && data[data.index(after: data.startIndex)] == 0x8b
+    }
+
+    /// Inflates a gzip stream with zlib's automatic gzip-header handling.
+    /// zlib also verifies the CRC and uncompressed length stored in the
+    /// gzip trailer.
+    static func decompress(_ data: Data) throws -> Data {
+        var stream = z_stream()
+        let initStatus = inflateInit2_(
+            &stream,
+            15 + 16,
+            ZLIB_VERSION,
+            Int32(MemoryLayout<z_stream>.size)
+        )
+        guard initStatus == Z_OK else {
+            throw CompressionError.decompressionFailed(
+                .gzip,
+                "zlib error \(initStatus)"
+            )
+        }
+        defer { inflateEnd(&stream) }
+
+        let chunkSize = 64 * 1024
+        var buffer = [UInt8](repeating: 0, count: chunkSize)
+        var output = Data()
+        var inputOffset = 0
+        var reachedEnd = false
+
+        try data.withUnsafeBytes { rawBuffer in
+            guard let input = rawBuffer.bindMemory(to: Bytef.self).baseAddress else {
+                throw CompressionError.invalidArchive(.gzip)
+            }
+
+            while !reachedEnd {
+                if stream.avail_in == 0, inputOffset < data.count {
+                    let remaining = data.count - inputOffset
+                    let chunk = min(remaining, Int(UInt32.max))
+                    stream.next_in = UnsafeMutablePointer(mutating: input.advanced(by: inputOffset))
+                    stream.avail_in = uInt(chunk)
+                    inputOffset += chunk
+                }
+
+                let availableBefore = stream.avail_in
+                let status = buffer.withUnsafeMutableBytes { outputBuffer in
+                    stream.next_out = outputBuffer.bindMemory(to: Bytef.self).baseAddress
+                    stream.avail_out = uInt(chunkSize)
+                    return inflate(&stream, Z_NO_FLUSH)
+                }
+
+                let produced = chunkSize - Int(stream.avail_out)
+                if produced > 0 {
+                    guard output.count <= DecompressionLimits.maximumBytes - produced else {
+                        throw CompressionError.tooLarge(
+                            maximumBytes: DecompressionLimits.maximumBytes
+                        )
+                    }
+                    output.append(contentsOf: buffer[0..<produced])
+                }
+
+                switch status {
+                case Z_OK:
+                    let consumed = Int(availableBefore) - Int(stream.avail_in)
+                    if produced == 0, consumed == 0 {
+                        if inputOffset >= data.count {
+                            throw CompressionError.truncated(.gzip)
+                        }
+                        throw CompressionError.decompressionFailed(
+                            .gzip,
+                            "zlib error \(status)"
+                        )
+                    }
+                case Z_STREAM_END:
+                    reachedEnd = true
+                case Z_BUF_ERROR:
+                    throw inputOffset >= data.count
+                        ? CompressionError.truncated(.gzip)
+                        : CompressionError.decompressionFailed(.gzip, "zlib error \(status)")
+                default:
+                    throw CompressionError.decompressionFailed(
+                        .gzip,
+                        "zlib error \(status)"
+                    )
+                }
+            }
+        }
+
+        return output
+    }
+}
+
+// MARK: - Zstandard
+
+enum ZstdDecoder {
+    private static let frameMagic: UInt32 = 0xFD2FB528
+    private static let skippableMagic: UInt32 = 0x184D2A50
+    private static let skippableMask: UInt32 = 0xFFFFFFF0
+
+    static func isZstd(_ data: Data) -> Bool {
+        guard data.count >= 4 else { return false }
+
+        var magic: UInt32 = 0
+        for offset in 0..<4 {
+            magic |= UInt32(data[data.startIndex + offset]) << (8 * UInt32(offset))
+        }
+        return magic == frameMagic
+            || (magic & skippableMask) == skippableMagic
+    }
+
+    static func decompress(_ data: Data) throws -> Data {
+        guard let stream = ZSTD_createDStream() else {
+            throw CompressionError.invalidArchive(.zstd)
+        }
+        defer { _ = ZSTD_freeDStream(stream) }
+        let initStatus = ZSTD_initDStream(stream)
+        if ZSTD_isError(initStatus) != 0 {
+            throw CompressionError.decompressionFailed(
+                .zstd,
+                "zstd error \(initStatus)"
+            )
+        }
+
+        let chunkSize = 128 * 1024
+        var buffer = [UInt8](repeating: 0, count: chunkSize)
+        var output = Data()
+        var finished = false
+
+        try data.withUnsafeBytes { rawBuffer in
+            var input = ZSTD_inBuffer(
+                src: rawBuffer.baseAddress,
+                size: data.count,
+                pos: 0
+            )
+
+            while !finished {
+                var outputBuffer = ZSTD_outBuffer()
+                let beforeInput = input.pos
+                var produced = 0
+                let status = buffer.withUnsafeMutableBytes { rawOutput in
+                    outputBuffer.dst = rawOutput.baseAddress
+                    outputBuffer.size = chunkSize
+                    outputBuffer.pos = 0
+                    let status = ZSTD_decompressStream(stream, &outputBuffer, &input)
+                    produced = Int(outputBuffer.pos)
+                    return status
+                }
+
+                if ZSTD_isError(status) != 0 {
+                    throw CompressionError.decompressionFailed(
+                        .zstd,
+                        "zstd error \(status)"
+                    )
+                }
+
+                if produced > 0 {
+                    guard output.count <= DecompressionLimits.maximumBytes - produced else {
+                        throw CompressionError.tooLarge(
+                            maximumBytes: DecompressionLimits.maximumBytes
+                        )
+                    }
+                    output.append(contentsOf: buffer[0..<produced])
+                }
+
+                if status == 0 {
+                    if input.pos == input.size {
+                        finished = true
+                    }
+                    continue
+                }
+
+                // A positive status means the frame needs more input or the
+                // decoder's internal output buffer flushed.  A full output
+                // buffer is normal progress and is drained on the next pass.
+                if produced == chunkSize {
+                    continue
+                }
+                if input.pos == input.size {
+                    throw CompressionError.truncated(.zstd)
+                }
+                if produced == 0, input.pos == beforeInput {
+                    throw CompressionError.decompressionFailed(
+                        .zstd,
+                        "decoder made no progress"
+                    )
+                }
+            }
+        }
+
+        return output
     }
 }
 

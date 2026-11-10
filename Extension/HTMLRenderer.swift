@@ -167,6 +167,29 @@ enum HTMLRenderer {
         return RenderedPreview(title: title, html: html, summary: "plain text body")
     }
 
+    /// Shown when Quick Look routes a non-email gzip or zstd archive to the
+    /// extension because those content types are part of the supported set
+    /// (needed for `.eml.gz` / `.eml.zst`).
+    static func renderArchiveNotice(
+        fileName: String,
+        format: String,
+        compressedBytes: Int,
+        decompressedBytes: Int
+    ) -> RenderedPreview {
+        let text = """
+        This \(format) archive is not an email message.
+
+        File: \(fileName)
+        Compressed: \(byteCount(compressedBytes))
+        Decompressed: \(byteCount(decompressedBytes))
+        """
+        return RenderedPreview(
+            title: fileName,
+            html: wrapPlainText(text, header: "", attachments: ""),
+            summary: "\(format) archive, not a message"
+        )
+    }
+
     // MARK: Body selection
 
     private static func findBody(in part: MIMEPart) -> (text: String, isHTML: Bool)? {

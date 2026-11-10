@@ -8,6 +8,7 @@ APEX="$APP/Contents/PlugIns/EMLQuickLookExtension.appex"
 SDK="$(xcrun --show-sdk-path)"
 TARGET="arm64-apple-macosx14.0"
 ICON="$ROOT/Resources/AppIcon.icns"
+ZSTD="$ROOT/Vendor/zstd"
 
 if [[ ! -f "$ICON" || "$ROOT/Tools/makeicon.swift" -nt "$ICON" ]]; then
     "$ROOT/icon.sh"
@@ -16,6 +17,16 @@ fi
 rm -rf "$BUILD"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APEX/Contents/MacOS"
 cp "$ICON" "$APP/Contents/Resources/AppIcon.icns"
+cp "$ZSTD/LICENSE" "$APP/Contents/Resources/Zstandard-LICENSE.txt"
+
+echo "==> Building zstd decoder"
+xcrun clang \
+    -O2 \
+    -fPIC \
+    -target "$TARGET" \
+    -isysroot "$SDK" \
+    -c "$ZSTD/zstddeclib.c" \
+    -o "$BUILD/zstddeclib.o"
 
 echo "==> Building Quick Look extension"
 xcrun swiftc \
@@ -25,6 +36,7 @@ xcrun swiftc \
     -application-extension \
     -parse-as-library \
     -O \
+    -I "$ZSTD/include" \
     -framework Foundation \
     -framework QuickLookUI \
     -framework UniformTypeIdentifiers \
@@ -32,7 +44,8 @@ xcrun swiftc \
     -o "$APEX/Contents/MacOS/EMLQuickLookExtension" \
     "$ROOT/Extension/PreviewProvider.swift" \
     "$ROOT/Extension/MIMERenderer.swift" \
-    "$ROOT/Extension/HTMLRenderer.swift"
+    "$ROOT/Extension/HTMLRenderer.swift" \
+    "$BUILD/zstddeclib.o"
 
 cp "$ROOT/Extension/Info.plist" "$APEX/Contents/Info.plist"
 
@@ -55,11 +68,13 @@ xcrun swiftc \
     -target "$TARGET" \
     -sdk "$SDK" \
     -O \
+    -I "$ZSTD/include" \
     -framework Foundation \
     -o "$BUILD/emlrender" \
     "$ROOT/Tools/main.swift" \
     "$ROOT/Extension/MIMERenderer.swift" \
-    "$ROOT/Extension/HTMLRenderer.swift"
+    "$ROOT/Extension/HTMLRenderer.swift" \
+    "$BUILD/zstddeclib.o"
 
 echo "==> Signing (ad-hoc)"
 codesign --force --sign - \

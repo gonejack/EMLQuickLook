@@ -5,7 +5,8 @@
 <h1 align="center">EML Quick Look</h1>
 
 <p align="center">
-  A drop-in Quick Look replacement for <code>.eml</code> and <code>.emlx</code> files on macOS.<br>
+  A drop-in Quick Look replacement for <code>.eml</code>, <code>.emlx</code>, gzipped
+  <code>.eml.gz</code>, and zstd-compressed <code>.eml.zst</code> files on macOS.<br>
   It parses and renders the message itself, so valid mail no longer previews as a blank page.
 </p>
 
@@ -38,7 +39,8 @@ EML Quick Look exists so that waiting for a fix is optional.
 ## A seamless replacement
 
 EML Quick Look is meant to disappear into Quick Look, not become another app you have to
-remember. Select an `.eml` or `.emlx` file in Finder, press Space, and read the message.
+remember. Select an `.eml`, `.emlx`, `.eml.gz`, or `.eml.zst` file in Finder, press Space,
+and read the message.
 There is no import step, no conversion, and no companion window to keep open. It replaces
 Apple Mail's Quick Look previewer, not Mail itself; the files, the Mail library, and the
 **Open with Mail** action are untouched.
@@ -67,6 +69,8 @@ locally generated inline image.
 **Message support**
 
 - `.eml` and Apple Mail `.emlx` files
+- gzip-compressed `.eml.gz` / `.emlx.gz` archives
+- zstd-compressed `.eml.zst` / `.emlx.zst` archives
 - CRLF, LF, and mixed line endings
 - base64 and quoted-printable transfer encodings
 - charset detection from the declared charset, HTML `<meta>` charset, UTF-8, GB18030,
@@ -92,6 +96,9 @@ locally generated inline image.
 
 **Safety**
 
+- gzip streams are inflated with zlib, which verifies the CRC and uncompressed length;
+  zstd streams use the vendored single-file decoder from zstd 1.5.7; decompression of either
+  format is capped at 512 MB
 - scripts, iframes, objects, embeds, meta-refresh tags, inline event handlers, and
   `javascript:` URLs are removed from HTML
 - a restrictive Content-Security-Policy
@@ -102,8 +109,8 @@ locally generated inline image.
 ## How it works
 
 1. Quick Look hands the file URL to `PreviewProvider`.
-2. `.emlx` envelopes are unwrapped, line endings are normalized, and the headers and MIME
-   parts are parsed.
+2. Gzip and zstd containers (`.eml.gz` / `.eml.zst`) are inflated, `.emlx` envelopes are
+   unwrapped, line endings are normalized, and the headers and MIME parts are parsed.
 3. Transfer encodings, charsets, and RFC 2047 headers are decoded.
 4. The renderer selects the HTML body (or plain text), rewrites `cid:` images as `data:`
    URLs, sanitizes the HTML, and adds a Mail-style header.
@@ -189,6 +196,7 @@ This creates:
 
 - `build/EMLQuickLook.app` — host app with the Quick Look extension
 - `build/emlrender` — command-line renderer that writes the preview HTML
+- `build/zstddeclib.o` — the compiled vendored Zstandard decoder, linked into both
 
 The host app icon is drawn by `Tools/makeicon.swift`, packaged into
 `Resources/AppIcon.icns` by `icon.sh`, and regenerated automatically when the source or the
@@ -196,8 +204,8 @@ The host app icon is drawn by `Tools/makeicon.swift`, packaged into
 
 ## Verify
 
-Select an `.eml` file in Finder and press Space. The first preview can take a moment while
-the extension starts.
+Select an `.eml`, `.emlx`, `.eml.gz`, or `.eml.zst` file in Finder and press Space. The first
+preview can take a moment while the extension starts.
 
 Render a file without Quick Look:
 
@@ -206,12 +214,24 @@ Render a file without Quick Look:
 open /tmp/preview.html
 ```
 
-The `emlrender` output reports the parsed title, body type, and number of embedded images.
-For example, using the synthetic message from the screenshots:
+Gzipped and zstd-compressed messages work the same way:
+
+```sh
+gzip -c docs/example.eml > /tmp/example.eml.gz
+./build/emlrender /tmp/example.eml.gz /tmp/preview.html
+
+zstd -c docs/example.eml > /tmp/example.eml.zst
+./build/emlrender /tmp/example.eml.zst /tmp/preview.html
+```
+
+The `emlrender` output reports whether the input was gzip- or zstd-compressed, the parsed
+title, body type, and number of embedded images. For example, using the synthetic message
+from the screenshots:
 
 ```
-input bytes:   108432
-message bytes: 108432
+input bytes:   107006
+compression:   none
+message bytes: 107006
 title:         Notes from the October review
 summary:       html body, 1 inline image(s)
 html bytes:    106844
@@ -294,6 +314,10 @@ Treat an untrusted message with the same caution you would in Mail.
 - Releases are arm64-only and ad-hoc signed.
 - Quick Look has no documented per-content-type precedence, so Mail's previewer must be
   disabled during installation.
+- Quick Look identifies gzip archives as `org.gnu.gnu-zip-archive` and zstd archives through
+  this app's exported `com.youi.EMLQuickLook.zstd` type, so the extension is also offered for
+  other `.gz`, `.zst`, and `.zstd` files. Archives that do not contain an email show a short
+  notice instead of a binary preview.
 
 ## Uninstall
 
@@ -311,7 +335,7 @@ Extension/
   PreviewProvider.swift   QLPreviewProvider that returns HTML data
   MIMERenderer.swift      MIME parser, decoders, charset and header handling
   HTMLRenderer.swift      body selection, image embedding, sanitization, Mail-style CSS
-  Info.plist              declares com.apple.mail.email and com.apple.mail.emlx
+  Info.plist              declares com.apple.mail.email, com.apple.mail.emlx, gzip, and zstd
   Extension.entitlements  sandbox and read-only file access
 Host/
   main.swift              QLPreviewPanel test harness
@@ -325,6 +349,8 @@ Resources/
 docs/
   example.eml             synthetic message used for the screenshots
   screenshots/            light and dark Quick Look screenshots
+Vendor/
+  zstd/                   vendored zstd 1.5.7 single-file decoder (BSD-3-Clause)
 build.sh                  builds and ad-hoc signs everything
 icon.sh                   renders and packages the app icon
 install.sh                installs and elects the extension

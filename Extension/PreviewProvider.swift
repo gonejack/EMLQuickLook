@@ -3,7 +3,8 @@ import QuickLookUI
 import UniformTypeIdentifiers
 import os
 
-/// Data-based Quick Look preview for RFC 5322 `.eml` and Mail `.emlx` files.
+/// Data-based Quick Look preview for RFC 5322 `.eml`, Mail `.emlx`, and
+/// gzip- or zstd-compressed `.eml.gz` / `.eml.zst` files.
 ///
 /// Apple's `MailQuickLookExtension` passes the raw file bytes to
 /// `MCMessage +messageWithRFC822Data:sanitizeData:` with `sanitizeData:NO`.
@@ -28,16 +29,27 @@ final class PreviewProvider: QLPreviewProvider, QLPreviewingController {
         Self.logger.notice("preview request: \(source.path, privacy: .public)")
 
         let raw = try Data(contentsOf: source, options: .mappedIfSafe)
-        let messageData = EMLXMessage.messageData(from: raw)
-        let message = MIMEParser.parse(messageData)
-        let rendered = HTMLRenderer.render(
-            message: message,
-            fileName: source.lastPathComponent
-        )
+        let unpacked = try MessageData.unpack(raw, fileName: source.lastPathComponent)
+        let rendered: RenderedPreview
+        if unpacked.isCompressed,
+           !MIMEParser.hasMessageHeaders(unpacked.messageData) {
+            rendered = HTMLRenderer.renderArchiveNotice(
+                fileName: source.lastPathComponent,
+                format: unpacked.compression?.rawValue ?? "compressed",
+                compressedBytes: raw.count,
+                decompressedBytes: unpacked.expandedData.count
+            )
+        } else {
+            let message = MIMEParser.parse(unpacked.messageData)
+            rendered = HTMLRenderer.render(
+                message: message,
+                fileName: source.lastPathComponent
+            )
+        }
         let htmlData = Data(rendered.html.utf8)
 
         Self.logger.notice(
-            "rendered \(htmlData.count, privacy: .public) bytes of HTML from \(messageData.count, privacy: .public) message bytes (\(rendered.summary, privacy: .public))"
+            "rendered \(htmlData.count, privacy: .public) bytes of HTML from \(unpacked.messageData.count, privacy: .public) message bytes (compression: \(unpacked.compression?.rawValue ?? "none", privacy: .public), \(rendered.summary, privacy: .public))"
         )
 
         let reply = QLPreviewReply(
